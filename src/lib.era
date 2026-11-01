@@ -86,6 +86,20 @@ extern "C" {
     fn malloc(size: usize) -> *mut byte;
     fn free(ptr: *mut byte);
 
+    // Win32 Clipboard & Input State
+    fn OpenClipboard(hWndNewOwner: *mut byte) -> i32;
+    fn CloseClipboard() -> i32;
+    fn EmptyClipboard() -> i32;
+    fn GetClipboardData(uFormat: u32) -> *mut byte;
+    fn SetClipboardData(uFormat: u32, hMem: *mut byte) -> *mut byte;
+    fn GlobalAlloc(uFlags: u32, dwBytes: usize) -> *mut byte;
+    fn GlobalLock(hMem: *mut byte) -> *mut byte;
+    fn GlobalUnlock(hMem: *mut byte) -> i32;
+    fn GetKeyState(nVirtKey: i32) -> i16;
+    fn GetClientRect(hWnd: *mut byte, lpRect: *mut byte) -> i32;
+    fn memcpy(dest: *mut byte, src: *const byte, count: usize) -> *mut byte;
+    fn strlen(str: *const byte) -> usize;
+
     // GDI+ Flat C API from gdiplus.dll
     fn GdiplusStartup(token: *mut usize, input: *const byte, output: *mut byte) -> i32;
     fn GdiplusShutdown(token: usize);
@@ -162,6 +176,13 @@ fn make_argb(a: i32, r: i32, g: i32, b: i32) -> u32 {
     return u_a + u_r + u_g + u_b;
 }
 
+struct WinRect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
 // Pure Era Native Window Container
 pub struct EraWindow {
     pub hwnd: *mut byte,
@@ -176,6 +197,8 @@ pub struct EraWindow {
     pub mouse_y: i32,
     pub mouse_down: i32,
     pub mouse_clicked: i32,
+    pub wheel_delta: i32,
+    pub is_ctrl_down: i32,
     pub last_char: i32,
     pub last_key_down: i32,
     pub is_open: i32,
@@ -217,7 +240,7 @@ pub fn eraui_create_window(title: string, width: i32, height: i32) -> EraWindow 
 
     let hdc = GetDC(hwnd);
     let mem_dc = CreateCompatibleDC(hdc);
-    let mem_bitmap = CreateCompatibleBitmap(hdc, 2560, 1440);
+    let mem_bitmap = CreateCompatibleBitmap(hdc, 3840, 2160);
     SelectObject(mem_dc, mem_bitmap);
 
     let mut graphics: *mut byte = 0 as *mut byte;
@@ -247,6 +270,8 @@ pub fn eraui_create_window(title: string, width: i32, height: i32) -> EraWindow 
         mouse_y: 0,
         mouse_down: 0,
         mouse_clicked: 0,
+        wheel_delta: 0,
+        is_ctrl_down: 0,
         last_char: 0,
         last_key_down: 0,
         is_open: 1,
@@ -265,8 +290,19 @@ pub fn eraui_poll_events(win: EraWindow) {
     }
 
     win.mouse_clicked = 0;
+    win.wheel_delta = 0;
     win.last_char = 0;
     win.last_key_down = 0;
+
+    let cs = GetKeyState(17); // VK_CONTROL
+    win.is_ctrl_down = if cs < 0 { 1 } else { 0 };
+
+    let mut cr = WinRect { left: 0, top: 0, right: 0, bottom: 0 };
+    GetClientRect(win.hwnd, (cr as *mut WinRect) as *mut byte);
+    if cr.right > 0 && cr.bottom > 0 {
+        win.width = cr.right;
+        win.height = cr.bottom;
+    }
 
     let mut msg = Msg {
         hwnd: 0 as *mut byte,
@@ -298,6 +334,11 @@ pub fn eraui_poll_events(win: EraWindow) {
             win.mouse_y = my;
         } else if m == 514 { // WM_LBUTTONUP
             win.mouse_down = 0;
+        } else if m == 522 { // WM_MOUSEWHEEL
+            let wp = msg.wParam as i64;
+            let raw_hi = ((wp / 65536) % 65536) as i32;
+            let signed_delta = if raw_hi > 32767 { raw_hi - 65536 } else { raw_hi };
+            win.wheel_delta = signed_delta;
         } else if m == 5 { // WM_SIZE
             let lp = msg.lParam as i64;
             let new_w = (lp % 65536) as i32;
@@ -370,7 +411,8 @@ pub fn eraui_draw_rounded_rect(
     GdipCreatePath(0, &mut path);
 
     let d = radius * 2;
-    let actual_d = if d > w { w } else if d > h { h } else { d };
+    let min_dim = if w < h { w } else { h };
+    let actual_d = if d > min_dim { min_dim } else { d };
 
     if actual_d > 0 {
         GdipAddPathArcI(path, x, y, actual_d, actual_d, 180.0, 90.0);
@@ -479,6 +521,52 @@ pub fn eraui_destroy_window(win: EraWindow) {
     ReleaseDC(win.hwnd, win.hdc);
     DestroyWindow(win.hwnd);
     GdiplusShutdown(win.token);
+}
+
+pub fn eraui_get_clipboard_text() -> string {
+    if OpenClipboard(0 as *mut byte) == 0 {
+        return "".to_string();
+    }
+    let h_data = GetClipboardData(1); // CF_TEXT = 1
+    if (h_data as *mut byte).is_null() {
+        CloseClipboard();
+        return "".to_string();
+    }
+    let p_data = GlobalLock(h_data);
+    if (p_data as *mut byte).is_null() {
+        CloseClipboard();
+        return "".to_string();
+    }
+    let len = strlen(p_data as *const byte) as i64;
+    let desc = StrDesc { data: p_data as *const byte, len };
+    let s = desc as string;
+    let res = s.clone();
+    GlobalUnlock(h_data);
+    CloseClipboard();
+    return res;
+}
+
+pub fn eraui_set_clipboard_text(text: string) -> bool {
+    if OpenClipboard(0 as *mut byte) == 0 {
+        return false;
+    }
+    EmptyClipboard();
+    let len = text.len();
+    // GMEM_MOVEABLE = 2, GMEM_ZEROINIT = 64 => 66
+    let h_mem = GlobalAlloc(66, (len + 1) as usize);
+    if (h_mem as *mut byte).is_null() {
+        CloseClipboard();
+        return false;
+    }
+    let p_mem = GlobalLock(h_mem);
+    if !(p_mem as *mut byte).is_null() {
+        let src = raw_cstr(text);
+        memcpy(p_mem, src, len as usize);
+        GlobalUnlock(h_mem);
+        SetClipboardData(1, h_mem); // CF_TEXT = 1
+    }
+    CloseClipboard();
+    return true;
 }
 
 // ==========================================
