@@ -1,0 +1,691 @@
+// github.com/era-lang-official/platform
+// 100% Pure Era Native Platform Window Abstraction, Event Queue, Frame Ticker & GDI+ Canvas Engine
+// Zero C or C++ Code Required
+
+import "github.com/era-lang-official/draw";
+
+struct StrDesc {
+    data: *const byte,
+    len: i64,
+}
+
+fn raw_cstr(s: string) -> *const byte {
+    let desc = s as *const StrDesc;
+    return desc.data;
+}
+
+struct GdiplusStartupInput {
+    f0: u64,
+    f1: u64,
+    f2: u64,
+}
+
+struct WndClass {
+    style: i64,
+    lpfnWndProc: fn(*mut byte, u32, usize, isize) -> isize,
+    cbExtra: i64,
+    hInstance: *mut byte,
+    hIcon: *mut byte,
+    hCursor: *mut byte,
+    hbrBackground: *mut byte,
+    lpszMenuName: *const byte,
+    lpszClassName: *const byte,
+}
+
+struct Msg {
+    hwnd: *mut byte,
+    message: u32,
+    wParam: usize,
+    lParam: isize,
+    time: u32,
+    pt_x: i32,
+    pt_y: i32,
+}
+
+struct RectF {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+extern "C" {
+    fn GetModuleHandleA(lpModuleName: *const byte) -> *mut byte;
+    fn LoadCursorA(hInstance: *mut byte, lpCursorName: usize) -> *mut byte;
+    fn SetCursor(hCursor: *mut byte) -> *mut byte;
+    fn RegisterClassA(lpWndClass: *const WndClass) -> u16;
+    fn CreateWindowExA(
+        dwExStyle: u32,
+        lpClassName: *const byte,
+        lpWindowName: *const byte,
+        dwStyle: u32,
+        X: i32,
+        Y: i32,
+        nWidth: i32,
+        nHeight: i32,
+        hWndParent: *mut byte,
+        hMenu: *mut byte,
+        hInstance: *mut byte,
+        lpParam: *mut byte
+    ) -> *mut byte;
+    fn GetDC(hWnd: *mut byte) -> *mut byte;
+    fn ReleaseDC(hWnd: *mut byte, hDC: *mut byte) -> i32;
+    fn CreateCompatibleDC(hDC: *mut byte) -> *mut byte;
+    fn CreateCompatibleBitmap(hDC: *mut byte, nWidth: i32, nHeight: i32) -> *mut byte;
+    fn SelectObject(hDC: *mut byte, hgdiobj: *mut byte) -> *mut byte;
+    fn DeleteDC(hDC: *mut byte) -> i32;
+    fn DeleteObject(hObject: *mut byte) -> i32;
+    fn BitBlt(hdcDest: *mut byte, nXDest: i32, nYDest: i32, nWidth: i32, nHeight: i32, hdcSrc: *mut byte, nXSrc: i32, nYSrc: i32, dwRop: u32) -> i32;
+    fn DestroyWindow(hWnd: *mut byte) -> i32;
+    fn ValidateRect(hWnd: *mut byte, lpRect: *mut byte) -> i32;
+    fn PeekMessageA(lpMsg: *mut byte, hWnd: *mut byte, wMsgFilterMin: u32, wMsgFilterMax: u32, wRemoveMsg: u32) -> i32;
+    fn TranslateMessage(lpMsg: *const byte) -> i32;
+    fn DispatchMessageA(lpMsg: *const byte) -> isize;
+    fn DefWindowProcA(hWnd: *mut byte, Msg: u32, wParam: usize, lParam: isize) -> isize;
+    fn MultiByteToWideChar(code_page: u32, flags: u32, src: *const byte, src_len: i32, dst: *mut byte, dst_len: i32) -> i32;
+    fn malloc(size: usize) -> *mut byte;
+    fn free(ptr: *mut byte);
+
+    // GDI+ Flat C API from gdiplus.dll
+    fn GdiplusStartup(token: *mut usize, input: *const byte, output: *mut byte) -> i32;
+    fn GdiplusShutdown(token: usize);
+    fn GdipCreateFromHDC(hdc: *mut byte, graphics: *mut (*mut byte)) -> i32;
+    fn GdipDeleteGraphics(graphics: *mut byte) -> i32;
+    fn GdipSetSmoothingMode(graphics: *mut byte, mode: i32) -> i32;
+    fn GdipSetTextRenderingHint(graphics: *mut byte, mode: i32) -> i32;
+    fn GdipSetPixelOffsetMode(graphics: *mut byte, mode: i32) -> i32;
+    fn GdipGraphicsClear(graphics: *mut byte, color: u32) -> i32;
+    fn GdipCreateSolidFill(color: u32, brush: *mut (*mut byte)) -> i32;
+    fn GdipDeleteBrush(brush: *mut byte) -> i32;
+    fn GdipFillRectangleI(graphics: *mut byte, brush: *mut byte, x: i32, y: i32, w: i32, h: i32) -> i32;
+    fn GdipCreatePath(fill_mode: i32, path: *mut (*mut byte)) -> i32;
+    fn GdipAddPathArcI(path: *mut byte, x: i32, y: i32, w: i32, h: i32, start_angle: f32, sweep_angle: f32) -> i32;
+    fn GdipClosePathFigure(path: *mut byte) -> i32;
+    fn GdipDeletePath(path: *mut byte) -> i32;
+    fn GdipFillPath(graphics: *mut byte, brush: *mut byte, path: *mut byte) -> i32;
+    fn GdipCreatePen1(color: u32, width: f32, unit: i32, pen: *mut (*mut byte)) -> i32;
+    fn GdipDeletePen(pen: *mut byte) -> i32;
+    fn GdipDrawPath(graphics: *mut byte, pen: *mut byte, path: *mut byte) -> i32;
+    fn GdipCreateFontFamilyFromName(name: *const byte, collection: *mut byte, family: *mut (*mut byte)) -> i32;
+    fn GdipDeleteFontFamily(family: *mut byte) -> i32;
+    fn GdipCreateFont(family: *mut byte, size: f32, style: i32, unit: i32, font: *mut (*mut byte)) -> i32;
+    fn GdipDeleteFont(font: *mut byte) -> i32;
+    fn GdipDrawString(graphics: *mut byte, text: *const byte, len: i32, font: *mut byte, rect: *const RectF, format: *mut byte, brush: *mut byte) -> i32;
+    fn GdipStringFormatGetGenericTypographic(format: *mut (*mut byte)) -> i32;
+    fn GdipDeleteStringFormat(format: *mut byte) -> i32;
+}
+
+fn make_wnd_class(
+    proc: fn(*mut byte, u32, usize, isize) -> isize,
+    hinstance: *mut byte,
+    cursor: *mut byte,
+    class_name: *const byte
+) -> WndClass {
+    return WndClass {
+        style: 3,
+        lpfnWndProc: proc,
+        cbExtra: 0,
+        hInstance: hinstance,
+        hIcon: 0 as *mut byte,
+        hCursor: cursor,
+        hbrBackground: 0 as *mut byte,
+        lpszMenuName: 0 as *const byte,
+        lpszClassName: class_name,
+    };
+}
+
+fn pure_wnd_proc(hwnd: *mut byte, msg: u32, wp: usize, lp: isize) -> isize {
+    if msg == 20 { // WM_ERASEBKGND
+        return 1; // Prevent white background flash
+    }
+    if msg == 15 { // WM_PAINT
+        ValidateRect(hwnd, 0 as *mut byte);
+        return 0;
+    }
+    return DefWindowProcA(hwnd, msg, wp, lp);
+}
+
+fn to_wide_str(s: string) -> *mut byte {
+    let cstr = raw_cstr(f"{s}\0");
+    let needed = MultiByteToWideChar(65001, 0, cstr, -1, 0 as *mut byte, 0);
+    let buf = malloc((needed as usize) * 2);
+    MultiByteToWideChar(65001, 0, cstr, -1, buf, needed);
+    free(cstr);
+    return buf;
+}
+
+fn make_argb(a: i32, r: i32, g: i32, b: i32) -> u32 {
+    let u_a = ((a & 255) as u32) * 16777216;
+    let u_r = ((r & 255) as u32) * 65536;
+    let u_g = ((g & 255) as u32) * 256;
+    let u_b = (b & 255) as u32;
+    return u_a + u_r + u_g + u_b;
+}
+
+// Pure Era Native Window Container
+pub struct EraWindow {
+    pub hwnd: *mut byte,
+    pub hdc: *mut byte,
+    pub mem_dc: *mut byte,
+    pub mem_bitmap: *mut byte,
+    pub graphics: *mut byte,
+    pub token: usize,
+    pub width: i32,
+    pub height: i32,
+    pub mouse_x: i32,
+    pub mouse_y: i32,
+    pub mouse_down: i32,
+    pub mouse_clicked: i32,
+    pub last_char: i32,
+    pub last_key_down: i32,
+    pub is_open: i32,
+    pub cur_cursor: i32,
+    pub cursor_arrow: *mut byte,
+    pub cursor_hand: *mut byte,
+    pub cursor_ibeam: *mut byte,
+    pub font_family: *mut byte,
+    pub str_format: *mut byte,
+}
+
+pub fn eraui_create_window(title: string, width: i32, height: i32) -> EraWindow {
+    let mut token: usize = 0;
+    let input = GdiplusStartupInput { f0: 1, f1: 0, f2: 0 };
+    GdiplusStartup(&mut token, input as *const byte, 0 as *mut byte);
+
+    let hinstance = GetModuleHandleA(0 as *const byte);
+    let cur_arrow = LoadCursorA(0 as *mut byte, 32512); // IDC_ARROW (standard arrow)
+    let cur_ibeam = LoadCursorA(0 as *mut byte, 32513); // IDC_IBEAM (text input)
+    let cur_hand = LoadCursorA(0 as *mut byte, 32649);  // IDC_HAND (clickable link/button)
+
+    let cls_name = raw_cstr("EraPureModernClass\0".to_string());
+    let wc = make_wnd_class(pure_wnd_proc, hinstance, cur_arrow, cls_name);
+    RegisterClassA(wc as *const WndClass);
+
+    let raw_title = raw_cstr(f"{title}\0");
+    let hwnd = CreateWindowExA(
+        0,
+        cls_name,
+        raw_title,
+        282001408, // WS_OVERLAPPEDWINDOW | WS_VISIBLE
+        100, 100,
+        width + 16, height + 39,
+        0 as *mut byte,
+        0 as *mut byte,
+        hinstance,
+        0 as *mut byte
+    );
+
+    let hdc = GetDC(hwnd);
+    let mem_dc = CreateCompatibleDC(hdc);
+    let mem_bitmap = CreateCompatibleBitmap(hdc, 2560, 1440);
+    SelectObject(mem_dc, mem_bitmap);
+
+    let mut graphics: *mut byte = 0 as *mut byte;
+    GdipCreateFromHDC(mem_dc, &mut graphics);
+    GdipSetSmoothingMode(graphics, 2); // SmoothingModeAntiAlias
+    GdipSetTextRenderingHint(graphics, 5); // TextRenderingHintClearTypeGridFit
+    GdipSetPixelOffsetMode(graphics, 2); // PixelOffsetModeHighQuality
+
+    let wfont_name = to_wide_str("Segoe UI".to_string());
+    let mut font_family: *mut byte = 0 as *mut byte;
+    GdipCreateFontFamilyFromName(wfont_name, 0 as *mut byte, &mut font_family);
+    free(wfont_name);
+
+    let mut str_format: *mut byte = 0 as *mut byte;
+    GdipStringFormatGetGenericTypographic(&mut str_format);
+
+    return EraWindow {
+        hwnd,
+        hdc,
+        mem_dc,
+        mem_bitmap,
+        graphics,
+        token,
+        width,
+        height,
+        mouse_x: 0,
+        mouse_y: 0,
+        mouse_down: 0,
+        mouse_clicked: 0,
+        last_char: 0,
+        last_key_down: 0,
+        is_open: 1,
+        cur_cursor: 0,
+        cursor_arrow: cur_arrow,
+        cursor_hand: cur_hand,
+        cursor_ibeam: cur_ibeam,
+        font_family,
+        str_format,
+    };
+}
+
+pub fn eraui_poll_events(win: EraWindow) {
+    if win.is_open == 0 {
+        return;
+    }
+
+    win.mouse_clicked = 0;
+    win.last_char = 0;
+    win.last_key_down = 0;
+
+    let mut msg = Msg {
+        hwnd: 0 as *mut byte,
+        message: 0,
+        wParam: 0,
+        lParam: 0,
+        time: 0,
+        pt_x: 0,
+        pt_y: 0,
+    };
+
+    let msg_ptr = (msg as *mut Msg) as *mut byte;
+
+    while PeekMessageA(msg_ptr, 0 as *mut byte, 0, 0, 1) != 0 {
+        let m = msg.message;
+        if m == 512 { // WM_MOUSEMOVE
+            let lp = msg.lParam as i64;
+            let mx = (lp % 65536) as i32;
+            let my = ((lp / 65536) % 65536) as i32;
+            win.mouse_x = mx;
+            win.mouse_y = my;
+        } else if m == 513 { // WM_LBUTTONDOWN
+            win.mouse_down = 1;
+            win.mouse_clicked = 1;
+            let lp = msg.lParam as i64;
+            let mx = (lp % 65536) as i32;
+            let my = ((lp / 65536) % 65536) as i32;
+            win.mouse_x = mx;
+            win.mouse_y = my;
+        } else if m == 514 { // WM_LBUTTONUP
+            win.mouse_down = 0;
+        } else if m == 5 { // WM_SIZE
+            let lp = msg.lParam as i64;
+            let new_w = (lp % 65536) as i32;
+            let new_h = ((lp / 65536) % 65536) as i32;
+            if new_w > 0 && new_h > 0 {
+                win.width = new_w;
+                win.height = new_h;
+            }
+        } else if m == 258 { // WM_CHAR
+            win.last_char = msg.wParam as i32;
+        } else if m == 256 { // WM_KEYDOWN
+            win.last_key_down = msg.wParam as i32;
+        } else if m == 16 || m == 2 || m == 18 { // WM_CLOSE, WM_DESTROY, WM_QUIT
+            win.is_open = 0;
+        }
+
+        TranslateMessage(msg_ptr as *const byte);
+        DispatchMessageA(msg_ptr as *const byte);
+    }
+}
+
+pub fn eraui_set_cursor(win: EraWindow, cursor_type: i32) {
+    win.cur_cursor = cursor_type;
+    if cursor_type == 1 {
+        if !(win.cursor_hand as *mut byte).is_null() {
+            SetCursor(win.cursor_hand);
+        }
+    } else if cursor_type == 2 {
+        if !(win.cursor_ibeam as *mut byte).is_null() {
+            SetCursor(win.cursor_ibeam);
+        }
+    } else {
+        if !(win.cursor_arrow as *mut byte).is_null() {
+            SetCursor(win.cursor_arrow);
+        }
+    }
+}
+
+pub fn eraui_begin_frame(win: EraWindow, r: i32, g: i32, b: i32) {
+    if win.is_open == 0 {
+        return;
+    }
+    let color = make_argb(255, r, g, b);
+    GdipGraphicsClear(win.graphics, color);
+}
+
+pub fn eraui_draw_rect(win: EraWindow, x: i32, y: i32, w: i32, h: i32, r: i32, g: i32, b: i32, a: i32) {
+    if a <= 0 || win.is_open == 0 {
+        return;
+    }
+    let argb = make_argb(a, r, g, b);
+    let mut brush: *mut byte = 0 as *mut byte;
+    GdipCreateSolidFill(argb, &mut brush);
+    GdipFillRectangleI(win.graphics, brush, x, y, w, h);
+    GdipDeleteBrush(brush);
+}
+
+pub fn eraui_draw_rounded_rect(
+    win: EraWindow,
+    x: i32, y: i32, w: i32, h: i32,
+    radius: i32,
+    r: i32, g: i32, b: i32, a: i32,
+    br: i32, bg: i32, bb: i32, ba: i32
+) {
+    if win.is_open == 0 {
+        return;
+    }
+
+    let mut path: *mut byte = 0 as *mut byte;
+    GdipCreatePath(0, &mut path);
+
+    let d = radius * 2;
+    let actual_d = if d > w { w } else if d > h { h } else { d };
+
+    if actual_d > 0 {
+        GdipAddPathArcI(path, x, y, actual_d, actual_d, 180.0, 90.0);
+        GdipAddPathArcI(path, x + w - actual_d, y, actual_d, actual_d, 270.0, 90.0);
+        GdipAddPathArcI(path, x + w - actual_d, y + h - actual_d, actual_d, actual_d, 0.0, 90.0);
+        GdipAddPathArcI(path, x, y + h - actual_d, actual_d, actual_d, 90.0, 90.0);
+        GdipClosePathFigure(path);
+    }
+
+    if a > 0 {
+        let argb = make_argb(a, r, g, b);
+        let mut brush: *mut byte = 0 as *mut byte;
+        GdipCreateSolidFill(argb, &mut brush);
+        GdipFillPath(win.graphics, brush, path);
+        GdipDeleteBrush(brush);
+    }
+
+    if ba > 0 {
+        let b_argb = make_argb(ba, br, bg, bb);
+        let mut pen: *mut byte = 0 as *mut byte;
+        GdipCreatePen1(b_argb, 1.0, 2, &mut pen); // UnitPixel = 2
+        GdipDrawPath(win.graphics, pen, path);
+        GdipDeletePen(pen);
+    }
+
+    GdipDeletePath(path);
+}
+
+pub fn eraui_draw_shadow(
+    win: EraWindow,
+    x: i32, y: i32, w: i32, h: i32,
+    radius: i32, blur: i32,
+    r: i32, g: i32, b: i32, a: i32
+) {
+    if blur <= 0 || a <= 0 || win.is_open == 0 {
+        return;
+    }
+
+    let layers = if blur > 3 { 3 } else { blur };
+    let mut i = layers;
+    while i >= 1 {
+        let expand = i * 2;
+        let layer_alpha = (a / (layers + 1)) * (layers - i + 1);
+        eraui_draw_rounded_rect(
+            win,
+            x - expand, y + (i * 2), w + (expand * 2), h + (expand * 2),
+            radius + expand,
+            r, g, b, layer_alpha,
+            0, 0, 0, 0
+        );
+        i -= 1;
+    }
+}
+
+pub fn eraui_draw_circle(win: EraWindow, cx: i32, cy: i32, radius: i32, r: i32, g: i32, b: i32, a: i32) {
+    if a <= 0 || win.is_open == 0 {
+        return;
+    }
+    let d = radius * 2;
+    let x = cx - radius;
+    let y = cy - radius;
+    eraui_draw_rounded_rect(win, x, y, d, d, radius, r, g, b, a, 0, 0, 0, 0);
+}
+
+pub fn eraui_draw_text(win: EraWindow, text: string, x: i32, y: i32, size: i32, r: i32, g: i32, b: i32, is_bold: i32) {
+    if win.is_open == 0 || text.len() == 0 {
+        return;
+    }
+
+    let wtext = to_wide_str(text);
+    let mut font: *mut byte = 0 as *mut byte;
+    let font_style = if is_bold != 0 { 1 } else { 0 }; // FontStyleBold = 1
+    GdipCreateFont(win.font_family, size as f32, font_style, 2, &mut font); // UnitPixel = 2
+
+    let argb = make_argb(255, r, g, b);
+    let mut brush: *mut byte = 0 as *mut byte;
+    GdipCreateSolidFill(argb, &mut brush);
+
+    let rect = RectF {
+        x: x as f32,
+        y: y as f32,
+        w: 2000.0,
+        h: 200.0,
+    };
+
+    GdipDrawString(win.graphics, wtext, -1, font, rect as *const RectF, win.str_format, brush);
+
+    GdipDeleteBrush(brush);
+    GdipDeleteFont(font);
+    free(wtext);
+}
+
+pub fn eraui_end_frame(win: EraWindow) {
+    if win.is_open == 0 {
+        return;
+    }
+    BitBlt(win.hdc, 0, 0, win.width, win.height, win.mem_dc, 0, 0, 0x00CC0020); // SRCCOPY
+}
+
+pub fn eraui_destroy_window(win: EraWindow) {
+    GdipDeleteGraphics(win.graphics);
+    GdipDeleteStringFormat(win.str_format);
+    GdipDeleteFontFamily(win.font_family);
+    DeleteObject(win.mem_bitmap);
+    DeleteDC(win.mem_dc);
+    ReleaseDC(win.hwnd, win.hdc);
+    DestroyWindow(win.hwnd);
+    GdiplusShutdown(win.token);
+}
+
+// ==========================================
+// Standard Cross-Platform Structs for Platform Package
+// ==========================================
+
+pub struct PlatformWindow {
+    pub title: string,
+    pub width: i64,
+    pub height: i64,
+    pub dpi_percent: i64,
+    pub resizable: bool,
+    pub is_focused: bool,
+    pub is_open: bool,
+}
+
+impl PlatformWindow {
+    pub fn new(title: string, width: i64, height: i64) -> PlatformWindow {
+        return PlatformWindow {
+            title,
+            width,
+            height,
+            dpi_percent: 100,
+            resizable: true,
+            is_focused: true,
+            is_open: true,
+        };
+    }
+
+    pub fn resize(&mut self, w: i64, h: i64) {
+        self.width = w;
+        self.height = h;
+    }
+
+    pub fn close(&mut self) {
+        self.is_open = false;
+    }
+}
+
+pub struct PointerEvent {
+    pub kind: i64,
+    pub button: i64,
+    pub pos: Point,
+    pub delta_x: i64,
+    pub delta_y: i64,
+    pub timestamp_ms: i64,
+}
+
+impl PointerEvent {
+    pub fn move_to(x: i64, y: i64, now_ms: i64) -> PointerEvent {
+        return PointerEvent {
+            kind: 2,
+            button: 3,
+            pos: Point::new(x, y),
+            delta_x: 0,
+            delta_y: 0,
+            timestamp_ms: now_ms,
+        };
+    }
+
+    pub fn click_down(x: i64, y: i64, button: i64, now_ms: i64) -> PointerEvent {
+        return PointerEvent {
+            kind: 0,
+            button,
+            pos: Point::new(x, y),
+            delta_x: 0,
+            delta_y: 0,
+            timestamp_ms: now_ms,
+        };
+    }
+
+    pub fn click_up(x: i64, y: i64, button: i64, now_ms: i64) -> PointerEvent {
+        return PointerEvent {
+            kind: 1,
+            button,
+            pos: Point::new(x, y),
+            delta_x: 0,
+            delta_y: 0,
+            timestamp_ms: now_ms,
+        };
+    }
+
+    pub fn scroll(x: i64, y: i64, dy: i64, now_ms: i64) -> PointerEvent {
+        return PointerEvent {
+            kind: 3,
+            button: 3,
+            pos: Point::new(x, y),
+            delta_x: 0,
+            delta_y: dy,
+            timestamp_ms: now_ms,
+        };
+    }
+}
+
+pub struct KeyEvent {
+    pub kind: i64,
+    pub code: i64,
+    pub char_val: string,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+}
+
+impl KeyEvent {
+    pub fn key_down(code: i64, ctrl: bool, alt: bool, shift: bool) -> KeyEvent {
+        return KeyEvent {
+            kind: 0,
+            code,
+            char_val: "".to_string(),
+            ctrl,
+            alt,
+            shift,
+        };
+    }
+
+    pub fn key_char(char_val: string) -> KeyEvent {
+        return KeyEvent {
+            kind: 2,
+            code: 0,
+            char_val,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        };
+    }
+}
+
+pub struct WindowEvent {
+    pub kind: i64,
+    pub new_width: i64,
+    pub new_height: i64,
+}
+
+pub struct EventQueue {
+    pub pointer_events: Vec<PointerEvent>,
+    pub key_events: Vec<KeyEvent>,
+    pub window_events: Vec<WindowEvent>,
+}
+
+impl EventQueue {
+    pub fn new() -> EventQueue {
+        return EventQueue {
+            pointer_events: Vec::<PointerEvent>::new(),
+            key_events: Vec::<KeyEvent>::new(),
+            window_events: Vec::<WindowEvent>::new(),
+        };
+    }
+
+    pub fn push_pointer(&mut self, e: PointerEvent) {
+        self.pointer_events.push(e);
+    }
+
+    pub fn push_key(&mut self, e: KeyEvent) {
+        self.key_events.push(e);
+    }
+
+    pub fn push_window(&mut self, e: WindowEvent) {
+        self.window_events.push(e);
+    }
+
+    pub fn has_pending(&self) -> bool {
+        return self.pointer_events.len() > 0 || self.key_events.len() > 0 || self.window_events.len() > 0;
+    }
+
+    pub fn clear(&mut self) {
+        self.pointer_events = Vec::<PointerEvent>::new();
+        self.key_events = Vec::<KeyEvent>::new();
+        self.window_events = Vec::<WindowEvent>::new();
+    }
+}
+
+pub struct FrameTicker {
+    pub target_fps: i64,
+    pub interval_ms: i64,
+    pub last_frame_ms: i64,
+    pub frame_count: i64,
+    pub delta_ms: i64,
+}
+
+impl FrameTicker {
+    pub fn new(target_fps: i64) -> FrameTicker {
+        let interval = if target_fps > 0 { 1000 / target_fps } else { 16 };
+        return FrameTicker {
+            target_fps,
+            interval_ms: interval,
+            last_frame_ms: 0,
+            frame_count: 0,
+            delta_ms: 0,
+        };
+    }
+
+    pub fn tick(&mut self, now_ms: i64) -> bool {
+        if self.last_frame_ms == 0 {
+            self.last_frame_ms = now_ms;
+            self.frame_count += 1;
+            self.delta_ms = self.interval_ms;
+            return true;
+        }
+
+        let elapsed = now_ms - self.last_frame_ms;
+        if elapsed >= self.interval_ms {
+            self.delta_ms = elapsed;
+            self.last_frame_ms = now_ms;
+            self.frame_count += 1;
+            return true;
+        }
+
+        return false;
+    }
+}
